@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from src.llm.backend_registry import CODEX_CLI_BACKEND_ID, LITELLM_BACKEND_ID
+from src.llm.backend_registry import CLAUDE_CLI_BACKEND_ID, CLAUDE_CODE_CLI_BACKEND_ID, CODEX_CLI_BACKEND_ID, LITELLM_BACKEND_ID
 from src.llm.generation_backend import GenerationBackend, GenerationError, GenerationErrorCode
 from src.llm.litellm_backend import LiteLLMCallable, LiteLLMGenerationBackend
 from src.llm.local_cli_backend import LocalCliGenerationBackend
@@ -34,6 +34,8 @@ def create_generation_backend(
         return LiteLLMGenerationBackend(litellm_completion_callable)
     if normalized == CODEX_CLI_BACKEND_ID:
         return LocalCliGenerationBackend(config, preset_id=CODEX_CLI_BACKEND_ID)
+    if normalized in (CLAUDE_CLI_BACKEND_ID, CLAUDE_CODE_CLI_BACKEND_ID):
+        return LocalCliGenerationBackend(config, preset_id=CLAUDE_CLI_BACKEND_ID)
 
     raise GenerationError(
         error_code=GenerationErrorCode.BACKEND_NOT_CONFIGURED,

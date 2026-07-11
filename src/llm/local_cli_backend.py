@@ -24,7 +24,7 @@ import time
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 from urllib.parse import parse_qsl, urlsplit
 
-from src.llm.backend_registry import CODEX_CLI_BACKEND_ID
+from src.llm.backend_registry import CODEX_CLI_BACKEND_ID, CLAUDE_CLI_BACKEND_ID
 from src.llm.generation_backend import (
     GenerationBackend,
     GenerationCapabilities,
@@ -160,8 +160,22 @@ CODEX_CLI_PRESET = LocalCliPreset(
     output_last_message_arg="--output-last-message",
 )
 
+CLAUDE_CLI_PRESET = LocalCliPreset(
+    preset_id=CLAUDE_CLI_BACKEND_ID,
+    executable="claude",
+    argv=(
+        "-p",
+        "--output-format",
+        "text",
+    ),
+    display_name="Claude CLI",
+    experimental=True,
+    output_last_message_arg=None,
+)
+
 SAFE_LOCAL_CLI_PRESETS = {
     CODEX_CLI_BACKEND_ID: CODEX_CLI_PRESET,
+    CLAUDE_CLI_BACKEND_ID: CLAUDE_CLI_PRESET,
 }
 
 
