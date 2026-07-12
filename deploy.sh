@@ -16,7 +16,10 @@ rsync -av \
   --exclude='*.pyc' \
   --exclude='.idea/' \
   --exclude='apps/dsa-web/node_modules/' \
-  /Users/guowenkai/code/GithubProject/daily_stock_analysis/ \
+  --exclude='docs/assets/' \
+  --exclude='docs/bot/' \
+  --exclude='tests/' \
+  /Users/kevin/code/GithubProject/daily_stock_analysis/ \
   "$ECS:$REMOTE_DIR/"
 
 echo "Building image on ECS..."
