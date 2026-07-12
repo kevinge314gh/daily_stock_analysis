@@ -54,11 +54,15 @@ from src.llm.hermes import (
 from src.llm.generation_params import apply_litellm_generation_params
 from src.llm.errors import call_litellm_with_param_recovery
 from src.llm.backend_registry import (
+    CLAUDE_CLI_BACKEND_ID,
+    CLAUDE_CODE_CLI_BACKEND_ID,
     CODEX_CLI_BACKEND_ID,
     LITELLM_BACKEND_ID,
     resolve_generation_backend_id,
     resolve_generation_fallback_backend_id,
 )
+
+_LOCAL_CLI_BACKEND_IDS = frozenset({CODEX_CLI_BACKEND_ID, CLAUDE_CLI_BACKEND_ID, CLAUDE_CODE_CLI_BACKEND_ID})
 from src.llm.backend_factory import create_generation_backend
 from src.llm.generation_backend import (
     GenerationBackend,
@@ -2183,7 +2187,7 @@ class GeminiAnalyzer:
                 backend_id, _fallback_backend_id = self._resolve_generation_backend_config()
             except GenerationError:
                 backend_id = ""
-            if backend_id == CODEX_CLI_BACKEND_ID:
+            if backend_id in _LOCAL_CLI_BACKEND_IDS:
                 logger.info(
                     "Analyzer generation backend: codex_cli configured; "
                     "LiteLLM API keys are not required for stock analysis generation"
@@ -2338,7 +2342,7 @@ class GeminiAnalyzer:
                 backend_id = resolve_generation_backend_id(config)
             except GenerationError:
                 pass
-            if backend_id == CODEX_CLI_BACKEND_ID:
+            if backend_id in _LOCAL_CLI_BACKEND_IDS:
                 logger.info(
                     "Analyzer LiteLLM: LITELLM_MODEL not configured; "
                     "using codex_cli generation backend"
@@ -2441,7 +2445,7 @@ class GeminiAnalyzer:
         if backend_error is not None:
             return self._can_use_generation_fallback(backend_error)
         backend_id, _fallback_backend_id = self._resolve_generation_backend_config()
-        if backend_id == CODEX_CLI_BACKEND_ID:
+        if backend_id in _LOCAL_CLI_BACKEND_IDS:
             return True
         return self._litellm_runtime_available()
 
@@ -2479,7 +2483,7 @@ class GeminiAnalyzer:
                 mixed_error = self._get_mixed_hermes_route_error(config, model)
                 if mixed_error is not None:
                     return mixed_error
-            if backend_id == CODEX_CLI_BACKEND_ID:
+            if backend_id in _LOCAL_CLI_BACKEND_IDS:
                 backend = self._get_generation_backend(backend_id)
                 get_config_error = getattr(backend, "get_config_error", None)
                 if callable(get_config_error):
@@ -3340,7 +3344,7 @@ class GeminiAnalyzer:
             config = self._get_runtime_config()
             backend_id, _fallback_backend_id = self._resolve_generation_backend_config()
             model_name = config.litellm_model or "unknown"
-            if backend_id == CODEX_CLI_BACKEND_ID:
+            if backend_id in _LOCAL_CLI_BACKEND_IDS:
                 model_name = CODEX_CLI_BACKEND_ID
                 legacy_audit_context["transport"] = CODEX_CLI_BACKEND_ID
             logger.info(f"========== AI 分析 {name}({code}) ==========")
@@ -3349,7 +3353,7 @@ class GeminiAnalyzer:
             logger.info(f"[LLM配置] 是否包含新闻: {'是' if news_context else '否'}")
 
             # 本地 CLI backend 是进程执行能力，不记录完整 prompt。
-            if backend_id == CODEX_CLI_BACKEND_ID:
+            if backend_id in _LOCAL_CLI_BACKEND_IDS:
                 prompt_preview = redact_diagnostic_text(prompt, limit=500)
             else:
                 prompt_preview = prompt[:500] + "..." if len(prompt) > 500 else prompt
@@ -3401,7 +3405,7 @@ class GeminiAnalyzer:
                 logger.info(
                     f"[LLM返回] {model_name} 响应成功, 耗时 {elapsed:.2f}s, 响应长度 {len(response_text)} 字符"
                 )
-                if backend_id == CODEX_CLI_BACKEND_ID:
+                if backend_id in _LOCAL_CLI_BACKEND_IDS:
                     response_preview = redact_diagnostic_text(response_text, limit=300)
                 else:
                     response_preview = response_text[:300] + "..." if len(response_text) > 300 else response_text

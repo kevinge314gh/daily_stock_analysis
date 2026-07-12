@@ -38,11 +38,15 @@ from src.notification_contracts import (
 )
 from src.llm.backend_registry import (
     AUTO_AGENT_BACKEND_ID,
+    CLAUDE_CLI_BACKEND_ID,
+    CLAUDE_CODE_CLI_BACKEND_ID,
     CODEX_CLI_BACKEND_ID,
     LITELLM_BACKEND_ID,
     SUPPORTED_AGENT_GENERATION_BACKENDS,
     SUPPORTED_GENERATION_BACKENDS,
 )
+
+_LOCAL_CLI_BACKEND_IDS = frozenset({CODEX_CLI_BACKEND_ID, CLAUDE_CLI_BACKEND_ID, CLAUDE_CODE_CLI_BACKEND_ID})
 from src.llm.local_cli_backend import (
     DEFAULT_GENERATION_BACKEND_MAX_CONCURRENCY,
     DEFAULT_LOCAL_CLI_BACKEND_MAX_CONCURRENCY,
@@ -2669,7 +2673,7 @@ class Config:
         unavailable because codex_cli is a text generation backend, not an
         Agent tool-calling runtime.
         """
-        if (self.agent_generation_backend or AUTO_AGENT_BACKEND_ID).strip().lower() == CODEX_CLI_BACKEND_ID:
+        if (self.agent_generation_backend or AUTO_AGENT_BACKEND_ID).strip().lower() in _LOCAL_CLI_BACKEND_IDS:
             return False
         # Phase 3 no longer lets AGENT_MODE=true bypass tool-route safety.
         if self._agent_mode_explicit:
@@ -2836,7 +2840,7 @@ class Config:
         # Other LiteLLM-native providers (for example cohere/*) run through the
         # direct litellm env path and therefore do not populate llm_model_list.
         has_direct_env_model = bool(self.litellm_model) and _uses_direct_env_provider(self.litellm_model)
-        local_generation_backend = generation_backend == CODEX_CLI_BACKEND_ID
+        local_generation_backend = generation_backend in _LOCAL_CLI_BACKEND_IDS
         if not local_generation_backend and not self.llm_model_list and not has_direct_env_model:
             if self.litellm_config_path:
                 issues.append(ConfigIssue(
