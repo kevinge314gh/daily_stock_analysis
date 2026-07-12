@@ -32,6 +32,10 @@ from src.report_language import normalize_report_language
 from src.market_context import get_market_role, get_market_guidelines
 from src.market_phase_prompt import format_market_phase_prompt_section
 from src.services.daily_market_context import format_daily_market_context_prompt_section
+from src.llm.backend_registry import CLAUDE_CLI_BACKEND_ID, CLAUDE_CODE_CLI_BACKEND_ID, CODEX_CLI_BACKEND_ID
+from src.llm.backend_factory import create_generation_backend
+
+_LOCAL_CLI_BACKEND_IDS = frozenset({CODEX_CLI_BACKEND_ID, CLAUDE_CLI_BACKEND_ID, CLAUDE_CODE_CLI_BACKEND_ID})
 
 logger = logging.getLogger(__name__)
 
@@ -753,6 +757,69 @@ class AgentExecutor:
                     exc_info=True,
                 )
 
+    def _run_loop_cli(
+        self,
+        messages: List[Dict[str, Any]],
+    ) -> AgentResult:
+        """History-packing single-turn for CLI backends (no tool calling).
+
+        Uses a concise conversational system prompt and packs recent history
+        into a single prompt for claude -p.
+        """
+        config = getattr(self.llm_adapter, "_config", None) or get_config()
+        generation_backend = str(getattr(config, "generation_backend", "") or "").strip().lower()
+
+        # Use a lightweight conversational system prompt instead of the full agent prompt
+        cli_system = (
+            "你是一位专业的股票分析师助手，擅长A股、港股、美股分析。"
+            "请用简洁、友好的中文回答用户的股票投资问题。"
+            "分析时可以结合基本面、技术面、市场情绪等角度，给出有价值的参考建议。"
+            "重要提示：本分析仅供参考，不构成投资建议，投资有风险，请谨慎决策。"
+        )
+
+        # Build prompt: system + recent conversation history (skip original long system msg)
+        parts: List[str] = [f"[系统]\n{cli_system}"]
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if not content or role == "system":
+                continue
+            if role == "user":
+                parts.append(f"[用户]\n{content}")
+            elif role == "assistant":
+                parts.append(f"[助手]\n{content}")
+        prompt = "\n\n".join(parts)
+
+        try:
+            backend = create_generation_backend(generation_backend, config=config)
+            result = backend.generate(prompt=prompt, generation_config={})
+            return AgentResult(
+                success=True,
+                content=result.text,
+                dashboard=None,
+                tool_calls_log=[],
+                total_steps=1,
+                total_tokens=0,
+                provider=generation_backend,
+                model=generation_backend,
+                error=None,
+                messages=messages,
+            )
+        except Exception as exc:
+            logger.error("CLI agent single-turn failed: %s", exc)
+            return AgentResult(
+                success=False,
+                content="",
+                dashboard=None,
+                tool_calls_log=[],
+                total_steps=0,
+                total_tokens=0,
+                provider=generation_backend,
+                model=generation_backend,
+                error=str(exc),
+                messages=messages,
+            )
+
     def _run_loop(
         self,
         messages: List[Dict[str, Any]],
@@ -767,6 +834,12 @@ class AgentExecutor:
         inline implementation while sharing the single authoritative loop
         in :mod:`src.agent.runner`.
         """
+        # CLI backends don't support tool calling — use history-packing instead
+        config = getattr(self.llm_adapter, "_config", None) or get_config()
+        generation_backend = str(getattr(config, "generation_backend", "") or "").strip().lower()
+        if generation_backend in _LOCAL_CLI_BACKEND_IDS:
+            return self._run_loop_cli(messages)
+
         loop_result = run_agent_loop(
             messages=messages,
             tool_registry=self.tool_registry,

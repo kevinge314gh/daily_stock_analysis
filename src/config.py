@@ -2674,7 +2674,10 @@ class Config:
         Agent tool-calling runtime.
         """
         if (self.agent_generation_backend or AUTO_AGENT_BACKEND_ID).strip().lower() in _LOCAL_CLI_BACKEND_IDS:
-            return False
+            # CLI backends don't support tool calling, but allow them when
+            # the user explicitly opts in (AGENT_MODE=true). The executor
+            # will fall back to history-packing single-turn mode.
+            return self._agent_mode_explicit and self.agent_mode
         # Phase 3 no longer lets AGENT_MODE=true bypass tool-route safety.
         if self._agent_mode_explicit:
             if not self.agent_mode:

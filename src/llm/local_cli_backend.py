@@ -140,6 +140,7 @@ class LocalCliPreset:
     display_name: str
     experimental: bool = True
     output_last_message_arg: Optional[str] = None
+    json_schema: Optional[Dict[str, Any]] = None
 
 
 CODEX_CLI_PRESET = LocalCliPreset(
@@ -171,6 +172,22 @@ CLAUDE_CLI_PRESET = LocalCliPreset(
     display_name="Claude CLI",
     experimental=True,
     output_last_message_arg=None,
+    json_schema={
+        "type": "object",
+        "required": ["sentiment_score", "trend_prediction", "operation_advice"],
+        "properties": {
+            "sentiment_score": {"type": "integer", "minimum": 0, "maximum": 100},
+            "trend_prediction": {"type": "string"},
+            "operation_advice": {"type": "string"},
+            "decision_type": {"type": "string"},
+            "confidence_level": {"type": "string"},
+            "dashboard": {"type": "object"},
+            "trend_analysis": {"type": "string"},
+            "technical_analysis": {"type": "string"},
+            "analysis_summary": {"type": "string"},
+            "risk_warning": {"type": "string"},
+        },
+    },
 )
 
 SAFE_LOCAL_CLI_PRESETS = {
@@ -735,12 +752,33 @@ class LocalCliGenerationBackend(GenerationBackend):
         argv: Sequence[str],
         cwd: str,
     ) -> tuple[list[str], Optional[Path]]:
+        import json as _json
+
+        runtime_argv = list(argv)
+        last_message_path: Optional[Path] = None
+
+        # Inject --json-schema if preset defines one (inline JSON string)
+        if self._preset.json_schema is not None:
+            runtime_argv = [
+                *runtime_argv,
+                "--json-schema",
+                _json.dumps(self._preset.json_schema, ensure_ascii=False),
+            ]
+
         output_arg = self._preset.output_last_message_arg
         if not output_arg:
-            return list(argv), None
+            unsafe = _first_unsafe_token(runtime_argv)
+            if unsafe:
+                raise self._error(
+                    GenerationErrorCode.UNSAFE_CONFIG,
+                    stage="configuration",
+                    retryable=False,
+                    fallbackable=False,
+                    details={"reason": "shell_metachar", "token_preview": unsafe},
+                )
+            return runtime_argv, None
 
         last_message_path = Path(cwd) / "last-message.txt"
-        runtime_argv = list(argv)
         injected = [output_arg, str(last_message_path)]
         if runtime_argv and runtime_argv[-1] == "-":
             runtime_argv = [*runtime_argv[:-1], *injected, runtime_argv[-1]]

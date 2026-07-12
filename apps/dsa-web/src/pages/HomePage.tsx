@@ -6,7 +6,6 @@ import { getParsedApiError, type ParsedApiError } from '../api/error';
 import { analysisApi } from '../api/analysis';
 import { historyApi } from '../api/history';
 import { agentApi, type SkillInfo } from '../api/agent';
-import { systemConfigApi } from '../api/systemConfig';
 import { ApiErrorAlert, Button, Drawer, EmptyState, InlineAlert } from '../components/common';
 import { DashboardStateBlock } from '../components/dashboard';
 import { StockAutocomplete } from '../components/StockAutocomplete';
@@ -19,7 +18,6 @@ import { TaskPanel } from '../components/tasks';
 import { useDashboardLifecycle, useHomeDashboardState } from '../hooks';
 import { useWatchlist } from '../hooks/useWatchlist';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
-import type { SetupStatusResponse } from '../types/systemConfig';
 import { normalizeReportLanguage } from '../utils/reportLanguage';
 import type { MarketReviewPayload, StockBarItem, TaskInfo } from '../types/analysis';
 import type { RunFlowSnapshotSource } from '../types/runFlow';
@@ -46,7 +44,7 @@ const DUPLICATE_BANNER_AUTO_DISMISS_MS = 5000;
 const HomePage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { language: uiLanguage, t } = useUiLanguage();
+  const { t } = useUiLanguage();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isSubmittingMarketReview, setIsSubmittingMarketReview] = useState(false);
   const [marketReviewNotice, setMarketReviewNotice] = useState<MarketReviewNotice>(null);
@@ -88,7 +86,6 @@ const HomePage: React.FC = () => {
   }, []);
 
   useEffect(() => stopMarketReviewPolling, [stopMarketReviewPolling]);
-  const [setupStatus, setSetupStatus] = useState<SetupStatusResponse | null>(null);
 
   const {
     query,
@@ -170,24 +167,6 @@ const HomePage: React.FC = () => {
     document.title = t('home.pageTitle');
   }, [t]);
 
-  useEffect(() => {
-    let active = true;
-    systemConfigApi.getSetupStatus()
-      .then((status) => {
-        if (active) {
-          setSetupStatus(status);
-        }
-      })
-      .catch(() => {
-        if (active) {
-          setSetupStatus(null);
-        }
-      });
-
-    return () => {
-      active = false;
-    };
-  }, []);
 
   useEffect(() => {
     let active = true;
@@ -346,16 +325,6 @@ const HomePage: React.FC = () => {
         break;
     }
   }, [closeStrategyMenu, focusStrategyItem, strategyOptions.length]);
-  const setupNeedsAction = setupStatus ? !setupStatus.isComplete : false;
-  const setupMissingLabels = useMemo(() => {
-    if (!setupStatus) {
-      return '';
-    }
-    const requiredNeedsAction = setupStatus.checks
-      .filter((check) => check.required && check.status === 'needs_action')
-      .map((check) => check.title);
-    return requiredNeedsAction.slice(0, 3).join(uiLanguage === 'en' ? ', ' : '、');
-  }, [setupStatus, uiLanguage]);
 
   useDashboardLifecycle({
     loadInitialHistory,
@@ -846,30 +815,6 @@ const HomePage: React.FC = () => {
           </div>
         ) : null}
 
-        {setupNeedsAction ? (
-          <div className="px-3 pb-2 md:px-4">
-            <InlineAlert
-              variant="warning"
-              title={t('home.setupIncomplete')}
-              message={
-                setupMissingLabels
-                  ? t('home.setupMissingWithLabels', { labels: setupMissingLabels })
-                  : t('home.setupMissingGeneric')
-              }
-              action={(
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => navigate('/settings')}
-                >
-                  {t('home.goSettings')}
-                </Button>
-              )}
-              className="rounded-xl px-3 py-2 text-xs shadow-none"
-            />
-          </div>
-        ) : null}
 
         <div className="flex-1 flex min-h-0 overflow-hidden">
           <div className="hidden min-h-0 w-64 shrink-0 flex-col overflow-hidden pl-4 pb-4 md:flex lg:w-72">

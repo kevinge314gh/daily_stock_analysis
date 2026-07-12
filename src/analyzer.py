@@ -4143,13 +4143,15 @@ class GeminiAnalyzer:
             raise ValueError("ambiguous_json")
         if len(fenced_matches) == 1:
             match = fenced_matches[0]
-            outside = (text[:match.start()] + text[match.end():]).strip()
-            if outside:
-                raise ValueError("ambiguous_json")
             fence_lang = (match.group("lang") or "").strip().lower()
             if fence_lang not in {"", "json"}:
                 raise ValueError("ambiguous_json")
             json_str = match.group("body").strip()
+            # Allow surrounding text (e.g. preamble from CLI backends like claude)
+            # as long as the outside text itself contains no embedded JSON object.
+            outside = (text[:match.start()] + text[match.end():]).strip()
+            if outside and self._contains_embedded_json_object(outside):
+                raise ValueError("ambiguous_json")
             data = self._load_analysis_json_candidate(json_str)
             return json_str, data
         if "```" in text:
