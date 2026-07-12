@@ -1,11 +1,11 @@
 #!/bin/bash
 set -e
-ECS="root@8.141.121.180"
+ECS="ecs"
 REMOTE_DIR="/opt/dsa-deploy"
 
 echo "Syncing files to ECS..."
 ssh "$ECS" "mkdir -p $REMOTE_DIR/data/vpn $REMOTE_DIR/logs $REMOTE_DIR/reports $REMOTE_DIR/longbridge_tokens"
-rsync -av \
+rsync -av -e ssh \
   --exclude='.git' \
   --exclude='.env' \
   --exclude='data/' \
