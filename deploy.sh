@@ -8,10 +8,10 @@ ssh "$ECS" "mkdir -p $REMOTE_DIR/data/vpn $REMOTE_DIR/logs $REMOTE_DIR/reports $
 rsync -av -e ssh \
   --exclude='.git' \
   --exclude='.env' \
-  --exclude='data/' \
-  --exclude='logs/' \
-  --exclude='reports/' \
-  --exclude='longbridge_tokens/' \
+  --exclude='/data/' \
+  --exclude='/logs/' \
+  --exclude='/reports/' \
+  --exclude='/longbridge_tokens/' \
   --exclude='__pycache__/' \
   --exclude='*.pyc' \
   --exclude='.idea/' \
@@ -23,10 +23,10 @@ rsync -av -e ssh \
   "$ECS:$REMOTE_DIR/"
 
 echo "Building image on ECS..."
-ssh "$ECS" "cd $REMOTE_DIR && docker build --build-arg CACHEBUST=\$(date +%s) -t dsa:latest -f docker/Dockerfile . 2>&1 | tail -20"
+ssh "$ECS" "cd $REMOTE_DIR && docker-compose -f docker/docker-compose.yml build --build-arg CACHEBUST=\$(date +%s) server 2>&1 | tail -30"
 
 echo "Restarting container..."
-ssh "$ECS" "cd $REMOTE_DIR && docker-compose -f docker/docker-compose.yml up -d server"
+ssh "$ECS" "cd $REMOTE_DIR && docker-compose -f docker/docker-compose.yml up -d --force-recreate server"
 
 echo "Logs:"
 sleep 5
