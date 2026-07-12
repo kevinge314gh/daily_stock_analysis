@@ -56,6 +56,9 @@ COPY requirements.txt .
 RUN pip3 install --break-system-packages -r requirements.txt 2>/dev/null || \
     pip3 install -r requirements.txt
 
+# 破坏缓存，确保每次部署都更新代码层
+ARG CACHEBUST=1
+
 # 应用代码
 COPY *.py ./
 COPY api/ ./api/
