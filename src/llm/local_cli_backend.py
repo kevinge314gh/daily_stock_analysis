@@ -141,6 +141,7 @@ class LocalCliPreset:
     experimental: bool = True
     output_last_message_arg: Optional[str] = None
     json_schema: Optional[Dict[str, Any]] = None
+    parse_json_output: bool = False  # if True, stdout is a JSON envelope; extract result + usage
 
 
 CODEX_CLI_PRESET = LocalCliPreset(
@@ -167,11 +168,14 @@ CLAUDE_CLI_PRESET = LocalCliPreset(
     argv=(
         "-p",
         "--output-format",
-        "text",
+        "json",
+        "--model",
+        "claude-sonnet-4-6",
     ),
     display_name="Claude CLI",
     experimental=True,
     output_last_message_arg=None,
+    parse_json_output=True,
     json_schema={
         "type": "object",
         "required": ["sentiment_score", "trend_prediction", "operation_advice"],
@@ -674,6 +678,47 @@ class LocalCliGenerationBackend(GenerationBackend):
                 details={**diagnostics, "reason": reason},
             )
 
+        # Parse JSON envelope from claude --output-format json
+        cli_usage: Dict[str, Any] = {
+            "usage_available": False,
+            "usage_source": "unavailable",
+            "backend": self.backend_id,
+        }
+        model_name = self._preset.preset_id
+        if self._preset.parse_json_output:
+            import json as _json
+            try:
+                envelope = _json.loads(text)
+                text = str(envelope.get("result") or "").strip()
+                raw_usage = envelope.get("usage") or {}
+                model_usage = envelope.get("modelUsage") or {}
+                # Pick the most expensive model as the primary (skip internal routing models)
+                if model_usage:
+                    primary_model = max(
+                        model_usage,
+                        key=lambda m: model_usage[m].get("costUSD", 0),
+                    )
+                else:
+                    primary_model = self._preset.preset_id
+                model_name = primary_model
+                # Build provider_usage_json in the format the usage system expects
+                provider_payload = {
+                    "input_tokens": raw_usage.get("input_tokens", 0),
+                    "output_tokens": raw_usage.get("output_tokens", 0),
+                    "cache_read_input_tokens": raw_usage.get("cache_read_input_tokens", 0),
+                    "cache_creation_input_tokens": raw_usage.get("cache_creation_input_tokens", 0),
+                }
+                cli_usage = {
+                    "usage_available": True,
+                    "usage_source": "cli_json",
+                    "backend": self.backend_id,
+                    "provider_usage_json": provider_payload,
+                    "total_cost_usd": envelope.get("total_cost_usd"),
+                    "model_usage": model_usage,
+                }
+            except Exception:
+                pass  # fall through with original text
+
         self._emit_progress(stream_progress_callback, 2)
         if response_validator is not None:
             try:
@@ -694,14 +739,10 @@ class LocalCliGenerationBackend(GenerationBackend):
 
         return GenerationResult(
             text=text,
-            model=self._preset.preset_id,
-            provider=self._preset.preset_id,
+            model=model_name,
+            provider=model_name,
             backend=self.backend_id,
-            usage={
-                "usage_available": False,
-                "usage_source": "unavailable",
-                "backend": self.backend_id,
-            },
+            usage=cli_usage,
             raw=None,
             diagnostics=diagnostics,
         )
