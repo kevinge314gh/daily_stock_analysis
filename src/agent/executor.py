@@ -16,6 +16,7 @@ same implementation.
 
 import json
 import logging
+import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
@@ -25,7 +26,7 @@ from src.agent.chat_context import build_agent_chat_context_bundle
 from src.agent.llm_adapter import LLMToolAdapter
 from src.agent.provider_trace import extract_provider_trace_turns
 from src.agent.runner import run_agent_loop, parse_dashboard_json
-from src.agent.stock_scope import StockScope, resolve_stock_scope
+from src.agent.stock_scope import StockScope, resolve_stock_scope, extract_stock_codes
 from src.storage import get_db
 from src.agent.tools.registry import ToolRegistry
 from src.report_language import normalize_report_language
@@ -36,6 +37,19 @@ from src.llm.backend_registry import CLAUDE_CLI_BACKEND_ID, CLAUDE_CODE_CLI_BACK
 from src.llm.backend_factory import create_generation_backend
 
 _LOCAL_CLI_BACKEND_IDS = frozenset({CODEX_CLI_BACKEND_ID, CLAUDE_CLI_BACKEND_ID, CLAUDE_CODE_CLI_BACKEND_ID})
+
+# Strip common analysis verbs/question phrases so a free-form chat message
+# (e.g. "深度分析贵州茅台的长期投资价值") reduces to the bare stock name before
+# name→code resolution. Used only as a best-effort fallback for CLI pre-fetch.
+_STOCK_QUERY_STRIP_RE = re.compile(
+    r"(深度|详细|帮我|帮忙|请|一下|简单|专业|全面)?"
+    r"(分析|诊断|研究|评估|解读|预测|看看|看一下|看下|讲讲|说说|聊聊)|"
+    r"(的)?(长期|中长期|短期|近期)?"
+    r"(投资价值|价值|走势|趋势|前景|基本面|技术面|行情|怎么样|如何|怎么看|"
+    r"能买吗|可以买吗|值得买吗|现在能买|如何操作)|"
+    r"[，。,.!？?、：:（）()【】\[\]\"'\s]",
+    re.IGNORECASE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -651,6 +665,24 @@ class AgentExecutor:
                 messages.append({"role": "user", "content": context_msg})
                 messages.append({"role": "assistant", "content": "好的，我已了解该股票的历史分析数据。请告诉我你想了解什么？"})
 
+        # CLI backends can't call tools, so pre-fetch live data for the scoped
+        # stock and inject it — otherwise the reply is answered from stale
+        # training knowledge. Tool-capable backends fetch this via tool calls.
+        if self._is_cli_backend():
+            live_stock_code = self._resolve_prefetch_stock_code(
+                message,
+                context,
+                scope_resolution.stock_scope,
+            )
+            if live_stock_code:
+                live_section = self._build_cli_live_data_section(
+                    live_stock_code,
+                    str((context or {}).get("stock_name") or ""),
+                )
+                if live_section:
+                    messages.append({"role": "user", "content": live_section})
+                    messages.append({"role": "assistant", "content": "已收到实时数据，我将基于这些真实数据进行分析。"})
+
         messages.append({"role": "user", "content": message})
         baseline_len = len(messages)
         run_id = str(uuid.uuid4())
@@ -757,14 +789,155 @@ class AgentExecutor:
                     exc_info=True,
                 )
 
+    def _resolve_prefetch_stock_code(
+        self,
+        message: str,
+        context: Optional[Dict[str, Any]],
+        stock_scope: Optional[StockScope],
+    ) -> str:
+        """Best-effort resolve a single stock code from a chat turn for pre-fetch.
+
+        Order: caller/frontend-provided context code → scope code → any code in
+        the message text → name→code resolution (raw message, then with common
+        analysis verbs/question phrases stripped). Returns "" when nothing
+        resolves, in which case the caller skips pre-fetch.
+        """
+        code = str((context or {}).get("stock_code") or "").strip()
+        if code:
+            return code
+        if stock_scope and stock_scope.expected_stock_code:
+            return stock_scope.expected_stock_code
+
+        text = message or ""
+        codes = extract_stock_codes(text)
+        if codes:
+            return codes[0]
+
+        try:
+            from src.services.name_to_code_resolver import resolve_name_to_code
+
+            resolved = resolve_name_to_code(text)
+            if not resolved:
+                cleaned = _STOCK_QUERY_STRIP_RE.sub("", text).strip()
+                if cleaned and cleaned != text:
+                    resolved = resolve_name_to_code(cleaned)
+            if resolved:
+                return resolved
+        except Exception:
+            logger.debug("名称->代码解析失败: %s", message, exc_info=True)
+
+        return ""
+
+    def _is_cli_backend(self) -> bool:
+        """Whether the active generation backend is a tool-less local CLI."""
+        config = getattr(self.llm_adapter, "_config", None) or get_config()
+        generation_backend = str(getattr(config, "generation_backend", "") or "").strip().lower()
+        return generation_backend in _LOCAL_CLI_BACKEND_IDS
+
+    def _build_cli_live_data_section(
+        self,
+        stock_code: str,
+        stock_name: str = "",
+    ) -> Optional[str]:
+        """Pre-fetch real-time data for a stock and format it as a prompt block.
+
+        CLI backends cannot call tools, so a fresh chat about a stock would
+        otherwise be answered from the model's stale training knowledge. Here we
+        fetch the same live data the daily pipeline uses (quote + technicals +
+        news) and inject it so the CLI analysis reflects current market data.
+
+        Each fetch is best-effort: a failing source is skipped, and ``None`` is
+        returned only when nothing useful was gathered (caller then falls back
+        to knowledge-based analysis, preserving prior behaviour).
+        """
+        from datetime import datetime
+
+        sections: List[str] = []
+
+        # --- Real-time quote ---
+        try:
+            from src.agent.tools.data_tools import _handle_get_realtime_quote
+
+            quote = _handle_get_realtime_quote(stock_code)
+            if isinstance(quote, dict) and not quote.get("error"):
+                if not stock_name:
+                    stock_name = str(quote.get("name") or "")
+                lines = [
+                    f"- 名称: {quote.get('name', '')} ({quote.get('code', stock_code)})",
+                    f"- 现价: {quote.get('price')} | 涨跌幅: {quote.get('change_pct')}% | 涨跌额: {quote.get('change_amount')}",
+                    f"- 今开: {quote.get('open')} | 最高: {quote.get('high')} | 最低: {quote.get('low')} | 昨收: {quote.get('pre_close')}",
+                    f"- 成交量: {quote.get('volume')} | 成交额: {quote.get('amount')} | 量比: {quote.get('volume_ratio')} | 换手率: {quote.get('turnover_rate')}%",
+                    f"- 市盈率: {quote.get('pe_ratio')} | 市净率: {quote.get('pb_ratio')} | 总市值: {quote.get('total_mv')} | 流通市值: {quote.get('circ_mv')}",
+                    f"- 数据源: {quote.get('source')}",
+                ]
+                sections.append("### 实时行情\n" + "\n".join(lines))
+        except Exception:
+            logger.warning("CLI 预取实时行情失败: %s", stock_code, exc_info=True)
+
+        # --- Technical trend ---
+        try:
+            from src.agent.tools.analysis_tools import _handle_analyze_trend
+
+            trend = _handle_analyze_trend(stock_code)
+            if isinstance(trend, dict) and not trend.get("error"):
+                lines = [
+                    f"- 趋势: {trend.get('trend_status')} | 均线排列: {trend.get('ma_alignment')} | 趋势强度: {trend.get('trend_strength')}",
+                    f"- 均线: MA5={trend.get('ma5')} MA10={trend.get('ma10')} MA20={trend.get('ma20')} MA60={trend.get('ma60')}",
+                    f"- 乖离率: MA5={trend.get('bias_ma5')}% MA10={trend.get('bias_ma10')}% MA20={trend.get('bias_ma20')}%",
+                    f"- MACD: {trend.get('macd_status')} ({trend.get('macd_signal')}) | RSI6={trend.get('rsi_6')} RSI12={trend.get('rsi_12')} ({trend.get('rsi_status')})",
+                    f"- 量能: {trend.get('volume_status')} | 5日量比: {trend.get('volume_ratio_5d')} | 趋势: {trend.get('volume_trend')}",
+                    f"- 支撑位: {trend.get('support_levels')} | 压力位: {trend.get('resistance_levels')}",
+                    f"- 综合信号: {trend.get('buy_signal')} (评分 {trend.get('signal_score')})",
+                ]
+                sections.append("### 技术面\n" + "\n".join(lines))
+        except Exception:
+            logger.warning("CLI 预取技术面失败: %s", stock_code, exc_info=True)
+
+        # --- Latest news ---
+        try:
+            from src.agent.tools.search_tools import _handle_search_stock_news
+
+            news = _handle_search_stock_news(stock_code, stock_name or stock_code)
+            if isinstance(news, dict) and news.get("success") and news.get("results"):
+                items = []
+                for idx, r in enumerate(news["results"][:5], start=1):
+                    title = str(r.get("title") or "").strip()
+                    snippet = str(r.get("snippet") or "").strip()
+                    source = str(r.get("source") or "").strip()
+                    date = str(r.get("published_date") or "").strip()
+                    meta = " · ".join(x for x in (source, date) if x)
+                    items.append(f"{idx}. {title}（{meta}）\n   {snippet}")
+                if items:
+                    sections.append("### 最新新闻\n" + "\n".join(items))
+        except Exception:
+            logger.warning("CLI 预取新闻失败: %s", stock_code, exc_info=True)
+
+        if not sections:
+            return None
+
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        header = (
+            f"[系统实时抓取数据，抓取时间 {timestamp}]\n"
+            "以下为通过数据源实时获取的真实行情与资讯，请**优先基于这些数据**分析，"
+            "不要使用过时的训练知识库数据，也不要在回复中声称缺乏实时数据。"
+        )
+        return header + "\n\n" + "\n\n".join(sections)
+
     def _run_loop_cli(
         self,
         messages: List[Dict[str, Any]],
+        *,
+        parse_dashboard: bool,
     ) -> AgentResult:
         """History-packing single-turn for CLI backends (no tool calling).
 
         Uses a concise conversational system prompt and packs recent history
         into a single prompt for claude -p.
+
+        ``parse_dashboard`` mirrors the caller's intent: dashboard mode keeps
+        the preset's report ``--json-schema`` so the output can be parsed into
+        a decision dashboard; chat mode drops it so the CLI answers in
+        free-form prose instead of a raw JSON blob.
         """
         config = getattr(self.llm_adapter, "_config", None) or get_config()
         generation_backend = str(getattr(config, "generation_backend", "") or "").strip().lower()
@@ -792,7 +965,11 @@ class AgentExecutor:
 
         try:
             backend = create_generation_backend(generation_backend, config=config)
-            result = backend.generate(prompt=prompt, generation_config={})
+            result = backend.generate(
+                prompt=prompt,
+                generation_config={},
+                apply_json_schema=parse_dashboard,
+            )
             return AgentResult(
                 success=True,
                 content=result.text,
@@ -838,7 +1015,7 @@ class AgentExecutor:
         config = getattr(self.llm_adapter, "_config", None) or get_config()
         generation_backend = str(getattr(config, "generation_backend", "") or "").strip().lower()
         if generation_backend in _LOCAL_CLI_BACKEND_IDS:
-            return self._run_loop_cli(messages)
+            return self._run_loop_cli(messages, parse_dashboard=parse_dashboard)
 
         loop_result = run_agent_loop(
             messages=messages,

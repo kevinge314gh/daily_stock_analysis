@@ -394,6 +394,7 @@ class LocalCliGenerationBackend(GenerationBackend):
         stream_progress_callback: Optional[Callable[[int], None]] = None,
         response_validator: Optional[Callable[[str], None]] = None,
         audit_context: Optional[Dict[str, Any]] = None,
+        apply_json_schema: bool = True,
     ) -> GenerationResult:
         executable, argv, executable_summary = self._resolve_command()
         timeout_seconds = min(
@@ -438,7 +439,9 @@ class LocalCliGenerationBackend(GenerationBackend):
             try:
                 with tempfile.TemporaryDirectory(prefix="dsa-local-cli-") as cwd:
                     diagnostics["cwd_kind"] = "temporary"
-                    command_argv, last_message_path = self._build_runtime_argv(argv, cwd)
+                    command_argv, last_message_path = self._build_runtime_argv(
+                        argv, cwd, apply_json_schema=apply_json_schema
+                    )
                     prompt_path = Path(cwd) / "prompt.txt"
                     stdout_path = Path(cwd) / "stdout.txt"
                     stderr_path = Path(cwd) / "stderr.txt"
@@ -792,14 +795,18 @@ class LocalCliGenerationBackend(GenerationBackend):
         self,
         argv: Sequence[str],
         cwd: str,
+        *,
+        apply_json_schema: bool = True,
     ) -> tuple[list[str], Optional[Path]]:
         import json as _json
 
         runtime_argv = list(argv)
         last_message_path: Optional[Path] = None
 
-        # Inject --json-schema if preset defines one (inline JSON string)
-        if self._preset.json_schema is not None:
+        # Inject --json-schema if preset defines one (inline JSON string).
+        # Skipped for free-form chat, where a schema-constrained JSON reply
+        # would be shown to the user as a raw JSON blob instead of prose.
+        if apply_json_schema and self._preset.json_schema is not None:
             runtime_argv = [
                 *runtime_argv,
                 "--json-schema",

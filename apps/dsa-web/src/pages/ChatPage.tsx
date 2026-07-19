@@ -40,6 +40,8 @@ const QUICK_QUESTIONS = [
 ];
 
 const MAX_SELECTED_SKILLS = 3;
+// 问股页默认选中的策略（仅影响本页初始选择，不改变全局默认策略/日报分析）
+const CHAT_DEFAULT_SKILL_ID = 'long_term_value';
 const CONTEXT_COMPRESSION_CONFIG_KEY = 'AGENT_CONTEXT_COMPRESSION_ENABLED';
 const STRONG_COMPARE_STOCK_MESSAGE_RE = /比较|对比|\bvs\b|和[^，。,.!?！？]{0,40}比/i;
 const WEAK_COMPARE_STOCK_MESSAGE_RE = /差异(?!化)|区别|不同|相比|对照|比一比/;
@@ -370,7 +372,9 @@ const ChatPage: React.FC = () => {
     agentApi.getSkills()
       .then((res) => {
         setSkills(res.skills);
+        const hasChatDefault = res.skills.some((s) => s.id === CHAT_DEFAULT_SKILL_ID);
         const defaultId =
+          (hasChatDefault ? CHAT_DEFAULT_SKILL_ID : '') ||
           res.default_skill_id ||
           res.skills[0]?.id ||
           '';

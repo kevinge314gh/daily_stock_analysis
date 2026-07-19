@@ -48,16 +48,17 @@ RUN if getent group 1000 >/dev/null; then groupmod -n dsa "$(getent group 1000 |
 
 WORKDIR /app
 
-# 前端静态文件（本地预构建，直接复制）
-COPY static/ ./static/
-
 # Python 依赖
 COPY requirements.txt .
 RUN pip3 install --break-system-packages -r requirements.txt 2>/dev/null || \
     pip3 install -r requirements.txt
 
-# 破坏缓存，确保每次部署都更新代码层
+# 破坏缓存，确保每次部署都更新代码层与前端产物
 ARG CACHEBUST=1
+
+# 前端静态文件（本地预构建，直接复制）
+# 放在 CACHEBUST 之后：前端每次部署必更新，且前端改动不再让上面的依赖层缓存失效
+COPY static/ ./static/
 
 # 应用代码
 COPY *.py ./

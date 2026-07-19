@@ -407,6 +407,25 @@ describe('ChatPage', () => {
     expect(screen.getByRole('checkbox', { name: '通用分析' })).not.toBeChecked();
   });
 
+  it('prefers 长期价值 as the chat default when available, over the global default', async () => {
+    mockGetSkills.mockResolvedValue({
+      skills: [
+        { id: 'bull_trend', name: '趋势分析', description: '默认趋势' },
+        { id: 'long_term_value', name: '长期价值', description: '价值投资' },
+      ],
+      default_skill_id: 'bull_trend',
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <ChatPage />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole('checkbox', { name: '长期价值' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: '趋势分析' })).not.toBeChecked();
+  });
+
   it('sends multiple selected skills in order', async () => {
     mockGetSkills.mockResolvedValue({
       skills: [
